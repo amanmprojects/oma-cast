@@ -10,6 +10,7 @@ import "core/Ranker.js" as Ranker
 import "core/Frecency.js" as Frecency
 import "core/OmarchyMenu.js" as OmarchyMenu
 import "core/RootSearch.js" as RootSearch
+import "core/Calculator.js" as Calculator
 import "services"
 
 // The clone's backend, in-process (SPEC §2.0). It owns the paths, the host
@@ -33,7 +34,7 @@ Item {
 
   readonly property var registry: Rpc.createRegistry()
   readonly property double startedAt: Date.now()
-  readonly property var deps: ({ Ranker: Ranker, Frecency: Frecency, OmarchyMenu: OmarchyMenu })
+  readonly property var deps: ({ Ranker: Ranker, Frecency: Frecency, OmarchyMenu: OmarchyMenu, Calculator: Calculator })
 
   // Every root-search candidate, rebuilt when a provider changes.
   property var candidates: []
@@ -318,7 +319,22 @@ Item {
         })
       },
       getActions: function(data) {
-        var candidate = backend.decorated(String(data && data.id || ""))
+        var id = String(data && data.id || "")
+        if (id.indexOf("calc:") === 0) {
+          var expr = id.slice(5)
+          var calcResult = Calculator.evaluate(expr)
+          if (calcResult) {
+            return RootSearch.actionsFor({
+              id: id,
+              kind: "calculator",
+              title: "= " + calcResult.formatted,
+              result: calcResult.formatted,
+              rawResult: calcResult.raw,
+              expression: calcResult.expression || expr
+            })
+          }
+        }
+        var candidate = backend.decorated(id)
         if (!candidate) {
           var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === data.id })[0]
           if (!fallback) throw new Error("Unknown command " + (data && data.id))
@@ -327,6 +343,22 @@ Item {
         return RootSearch.actionsFor(candidate)
       },
       performAction: function(data) {
+        // Calculator rows are generated, not stored candidates.
+        if (data && data.id && data.id.indexOf("calc:") === 0) {
+          var expr = data.id.slice(5)
+          var calcResult = Calculator.evaluate(data.query || expr)
+          if (calcResult) {
+            var action = data.action || "copy-result"
+            var text = String(calcResult.formatted)
+            if (action === "copy-equation") {
+              text = (calcResult.expression || expr) + " = " + calcResult.formatted
+            } else if (action === "copy-raw") {
+              text = String(calcResult.raw !== undefined ? calcResult.raw : calcResult.formatted)
+            }
+            Util.execArgv(["wl-copy", "--", text])
+            return { close: true, hud: action === "copy-equation" ? "Copied Equation" : "Copied to Clipboard" }
+          }
+        }
         // Fallbacks are rows, not stored candidates.
         var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === (data && data.id) })[0]
         if (fallback) {
@@ -336,6 +368,15 @@ Item {
         return backend.performAction(data)
       },
       getSearchHistory: function() { return frecencyStore.loaded ? frecencyStore.doc.searchHistory : [] }
+    })
+
+    Rpc.register(backend.registry, "calculator", {
+      calculate: function(data) {
+        var expr = String(data && (data.expression || data.query) || "")
+        var res = Calculator.evaluate(expr)
+        if (!res) throw new Error("Could not evaluate expression: " + expr)
+        return res
+      }
     })
 
     Rpc.register(backend.registry, "frecency", {

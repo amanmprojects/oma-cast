@@ -3,9 +3,10 @@ const assert = require("node:assert/strict")
 const Ranker = require("../plugin/core/Ranker.js")
 const Frecency = require("../plugin/core/Frecency.js")
 const OmarchyMenu = require("../plugin/core/OmarchyMenu.js")
+const Calculator = require("../plugin/core/Calculator.js")
 const RS = require("../plugin/core/RootSearch.js")
 
-const deps = { Ranker, Frecency, OmarchyMenu }
+const deps = { Ranker, Frecency, OmarchyMenu, Calculator }
 const NOW = Date.UTC(2026, 9, 19, 12)
 
 const apps = ["firefox", "chromium", "signal-desktop", "org.gnome.Nautilus", "Alacritty", "libreoffice-writer"].map((id) => ({
@@ -133,4 +134,36 @@ test("favourite reordering", () => {
 
 test("fallback URLs encode the query", () => {
   assert.equal(RS.fallbackUrl(RS.FALLBACKS[0], " a&b c "), "https://www.google.com/search?q=a%26b%20c")
+})
+
+test("calculator shows at the top of results for math expressions (Phase 2 accept)", () => {
+  const sections = results("2+2")
+  assert.equal(sections[0].id, "calculator")
+  assert.equal(sections[0].rows[0].candidate.title, "= 4")
+  assert.equal(sections[0].rows[0].candidate.result, "4")
+  assert.equal(sections[0].rows[0].candidate.typeLabel, "Calculator")
+
+  const unitSections = results("5 km in mi")
+  assert.equal(unitSections[0].id, "calculator")
+  assert.equal(unitSections[0].rows[0].candidate.title, "= 3.10685596119 mi")
+
+  const currSections = results("100 usd in eur")
+  assert.equal(currSections[0].id, "calculator")
+  assert.equal(currSections[0].rows[0].candidate.title, "= 92 EUR")
+})
+
+test("calculator row actions", () => {
+  const calcCandidate = {
+    id: "calc:2+2",
+    kind: "calculator",
+    result: "4",
+    expression: "2+2"
+  }
+  const actions = RS.actionsFor(calcCandidate)
+  assert.equal(actions[0].id, "copy-result")
+  assert.equal(actions[0].shortcut, "↵")
+  assert.equal(actions[1].id, "copy-equation")
+  assert.equal(actions[1].shortcut, "Ctrl ↵")
+  assert.equal(actions[2].id, "copy-raw")
+  assert.equal(actions[2].shortcut, "Ctrl Shift C")
 })

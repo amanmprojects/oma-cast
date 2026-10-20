@@ -166,6 +166,33 @@ function rootSections(candidates, query, ctx, deps) {
     var searchable = decorated.filter(function(c) { return c.rootSearch.when !== "empty" })
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
+    if (deps.Calculator) {
+      var calc = deps.Calculator.evaluate(q)
+      if (calc) {
+        sections.push({
+          id: "calculator",
+          title: "Calculator",
+          rows: [{
+            candidate: {
+              id: "calc:" + q,
+              type: "calculator",
+              kind: "calculator",
+              title: "= " + calc.formatted,
+              subtitle: calc.expression || q,
+              typeLabel: "Calculator",
+              glyph: "\uf1ec",
+              glyphFont: "symbols",
+              result: calc.formatted,
+              rawResult: calc.raw,
+              expression: calc.expression || q,
+              rootSearch: { when: "searching" }
+            },
+            record: null
+          }]
+        })
+      }
+    }
+
     if (results.length > 0) sections.push({ id: "results", title: "Results", rows: results })
     sections.push({ id: "fallback-commands", title: "Use “" + q + "” with…", rows: fallbackRows(q) })
     return sections
@@ -223,11 +250,18 @@ function actionsFor(candidate) {
     case "omarchy-menu":
     case "omarchy-link": primary = { id: "open", title: "Open Menu", icon: "" }; break
     case "fallback": primary = { id: "open", title: candidate.title, icon: "" }; break
+    case "calculator": primary = { id: "copy-result", title: "Copy Result", icon: "" }; break
     default: primary = { id: "open", title: "Open Command", icon: "" }
   }
   primary.shortcut = "↵"
   primary.section = "primary"
   list.push(primary)
+
+  if (candidate.kind === "calculator") {
+    list.push({ id: "copy-equation", title: "Copy Equation", shortcut: "Ctrl ↵", section: "primary", icon: "" })
+    list.push({ id: "copy-raw", title: "Copy Raw Number", shortcut: "Ctrl Shift C", section: "copy", icon: "" })
+    return list
+  }
 
   if (candidate.kind && candidate.kind.indexOf("omarchy-") === 0)
     list.push({ id: "open-in-omarchy-menu", title: "Open in Omarchy Menu", shortcut: "Ctrl ↵", section: "primary", icon: "" })

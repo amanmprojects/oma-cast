@@ -5,8 +5,6 @@
 //
 // Designed to run in both Node.js (unit tests) and Quickshell's QML JS runtime.
 
-var MAX_SAFE_DECIMALS = 10
-
 // ----------------------------------------------------------- Unit definitions
 
 var LENGTH_UNITS = {
@@ -141,28 +139,8 @@ var VOLUME_UNITS = {
   tsp: 4.92892159375
 }
 
-// Baseline exchange rates relative to USD (1.0).
-var CURRENCY_RATES = {
-  usd: 1.0,
-  eur: 0.92,
-  gbp: 0.79,
-  cad: 1.38,
-  aud: 1.52,
-  jpy: 152.0,
-  inr: 84.0,
-  chf: 0.88,
-  cny: 7.23,
-  nzd: 1.68,
-  brl: 5.70,
-  sek: 10.6,
-  krw: 1380.0,
-  mxn: 19.8,
-  sgd: 1.32,
-  hkd: 7.77,
-  nok: 10.9,
-  btc: 0.000015,
-  eth: 0.00038
-}
+// Currency codes, not rates. Rates are injected from the dated cache (SPEC §8.1).
+var FIAT_CURRENCIES = "AUD BRL CAD CHF CNY CZK DKK EUR GBP HKD HUF IDR ILS INR ISK JPY KRW MXN MYR NOK NZD PHP PLN RON SEK SGD THB TRY USD ZAR".split(" ")
 
 var CURRENCY_SYMBOLS = {
   $: "usd",
@@ -173,32 +151,27 @@ var CURRENCY_SYMBOLS = {
   "₩": "krw"
 }
 
-// ------------------------------------------------------------- Number cleaning
-
-function cleanFloat(n) {
-  if (!isFinite(n)) return n
-  var rounded = Number(n.toPrecision(12))
-  return Math.abs(rounded) < 1e-12 ? 0 : rounded
-}
+// ------------------------------------------------------------- Number display
 
 function formatNumber(n) {
-  var val = cleanFloat(n)
-  if (!isFinite(val)) return String(n)
-
-  var parts = String(val).split(".")
-  var intPart = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",")
-  if (parts.length > 1) {
-    var decPart = parts[1].replace(/0+$/, "")
-    return decPart.length > 0 ? intPart + "." + decPart : intPart
-  }
-  return intPart
+  if (!isFinite(n)) return String(n)
+  // [D] Display 12 significant digits for fractions; never round raw results
+  // or exactly representable integers. Format only the mantissa, not exponent.
+  var text = String(Number.isInteger(n) ? n : Number(n.toPrecision(12)))
+  var exponentAt = text.search(/e/i)
+  var exponent = exponentAt >= 0 ? text.slice(exponentAt) : ""
+  var parts = (exponentAt >= 0 ? text.slice(0, exponentAt) : text).split(".")
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return parts.join(".") + exponent
 }
 
 // -------------------------------------------------------- Base conversions
 
 function convertBase(val, targetBase) {
-  var n = Math.trunc(cleanFloat(val))
-  if (!isFinite(n)) return null
+  // [D] Reject fractions and unsafe integers instead of silently truncating or
+  // rounding them. QML has no BigInt, so exact bases are bounded by JS numbers.
+  if (!Number.isSafeInteger(val)) return null
+  var n = val
   var tb = targetBase.toLowerCase()
   switch (tb) {
     case "hex":
@@ -246,376 +219,290 @@ function convertTemperature(value, fromUnit, toUnit) {
   }
 }
 
-function convertUnits(val, fromUnit, toUnit) {
-  var f = fromUnit.toLowerCase()
-  var t = toUnit.toLowerCase()
+function convertUnits(val, fromUnit, toUnit, currency) {
+  if (typeof val !== "number" || !isFinite(val)) return null
+  var f = fromUnit.toLowerCase().replace(/^°/, "")
+  var t = toUnit.toLowerCase().replace(/^°/, "")
 
-  // Temperatures
   var temp = convertTemperature(val, f, t)
-  if (temp) {
+  if (temp && isFinite(temp.raw)) {
     temp.type = "unit"
     return temp
   }
 
-  // Standard ratio-based units
+  // Standard ratio-based units. Months/years are Julian averages; volume
+  // measures (gallon, pint, cup) are US units. [D]
   var tables = [LENGTH_UNITS, MASS_UNITS, TIME_UNITS, DATA_UNITS, VOLUME_UNITS]
   for (var i = 0; i < tables.length; i++) {
     var table = tables[i]
-    if (table[f] !== undefined && table[t] !== undefined) {
-      var baseVal = val * table[f]
-      var result = baseVal / table[t]
-      return {
-        raw: result,
-        formatted: formatNumber(result) + " " + toUnit,
-        type: "unit"
-      }
+    if (Object.prototype.hasOwnProperty.call(table, f) && Object.prototype.hasOwnProperty.call(table, t)) {
+      var result = val * (table[f] / table[t])
+      if (!isFinite(result)) return null
+      return { raw: result, formatted: formatNumber(result) + " " + toUnit, type: "unit" }
     }
   }
 
-  // Currencies
-  if (CURRENCY_RATES[f] !== undefined && CURRENCY_RATES[t] !== undefined) {
-    var inUsd = val / CURRENCY_RATES[f]
-    var currResult = inUsd * CURRENCY_RATES[t]
-    return {
-      raw: currResult,
-      formatted: formatNumber(currResult) + " " + toUnit.toUpperCase(),
-      type: "currency"
-    }
-  }
+  var fromCode = f.toUpperCase()
+  var toCode = t.toUpperCase()
+  var fromFiat = FIAT_CURRENCIES.indexOf(fromCode) >= 0
+  var toFiat = FIAT_CURRENCIES.indexOf(toCode) >= 0
+  var crypto = fromCode === "BTC" || fromCode === "ETH" || toCode === "BTC" || toCode === "ETH"
+  if (!fromFiat && !toFiat && !crypto) return null
 
-  return null
+  var rates = currency && currency.rates
+  var metadata = {
+    type: "currency",
+    rateSource: currency && currency.source || "ECB via Frankfurter",
+    rateDate: currency && currency.date || "",
+    stale: !!(currency && currency.stale)
+  }
+  if (!fromFiat || !toFiat) {
+    metadata.error = "Unsupported currency: " + (!fromFiat ? fromCode : toCode)
+  } else if (!rates || !Object.prototype.hasOwnProperty.call(rates, fromCode) || !Object.prototype.hasOwnProperty.call(rates, toCode)
+      || typeof rates[fromCode] !== "number" || !(rates[fromCode] > 0) || !isFinite(rates[fromCode])
+      || typeof rates[toCode] !== "number" || !(rates[toCode] > 0) || !isFinite(rates[toCode])) {
+    metadata.error = currency && currency.loading ? "Currency rates are loading…" : "Currency rates unavailable"
+  } else {
+    var currResult = val * (rates[toCode] / rates[fromCode])
+    if (!isFinite(currResult)) return null
+    metadata.raw = currResult
+    metadata.formatted = formatNumber(currResult) + " " + toCode
+  }
+  return metadata
 }
 
 // ---------------------------------------------------- Expression Evaluator
 
-// Recursive descent parser for safe arithmetic evaluation.
-function parseMath(str) {
-  var pos = 0
-  var s = str
-
-  function peek() {
-    while (pos < s.length && s[pos] === " ") pos++
-    return pos < s.length ? s[pos] : ""
-  }
-
-  function consume(char) {
-    if (peek() === char) {
-      pos++
-      return true
-    }
-    return false
-  }
-
-  function isModuloAtCurrent() {
-    // If '%' is followed by a number or expression, it's a binary modulo operator.
-    if (s[pos] !== "%") return false
-    var next = pos + 1
-    while (next < s.length && s[next] === " ") next++
-    if (next < s.length) {
-      var c = s[next]
-      if ((c >= "0" && c <= "9") || c === "(" || c === "+" || c === "-" || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")) {
-        return true
-      }
-    }
-    return false
-  }
-
-  function parseExpression() {
-    return parseAdditive()
-  }
-
-  function parseAdditive() {
-    var left = parseMultiplicative()
-    while (true) {
-      var op = peek()
-      if (op === "+" || op === "-") {
-        pos++
-        var isSub = (op === "-")
-        var rightNode = parseMultiplicativeWithPct()
-        if (rightNode.isPercent) {
-          // X + Y% -> X * (1 + Y/100)
-          var pctVal = left * (rightNode.value / 100)
-          left = isSub ? left - pctVal : left + pctVal
-        } else {
-          left = isSub ? left - rightNode.value : left + rightNode.value
-        }
-      } else {
-        break
-      }
-    }
-    return left
-  }
-
-  function parseMultiplicativeWithPct() {
-    var val = parseMultiplicative()
-    // Check if immediately followed by postfix percent (and not modulo)
-    if (peek() === "%" && !isModuloAtCurrent()) {
-      pos++
-      return { value: val, isPercent: true }
-    }
-    return { value: val, isPercent: false }
-  }
-
-  function parseMultiplicative() {
-    var left = parseExponential()
-    while (true) {
-      var c = peek()
-      if (c === "*" || c === "/" || (c === "%" && isModuloAtCurrent()) || c === "x" || c === "×") {
-        pos++
-        var right = parseExponential()
-        if (c === "*") left = left * right
-        else if (c === "/") {
-          if (right === 0) throw new Error("Division by zero")
-          left = left / right
-        } else if (c === "%") {
-          left = left % right
-        } else if (c === "x" || c === "×") {
-          left = left * right
-        }
-      } else {
-        break
-      }
-    }
-    return left
-  }
-
-  function parseExponential() {
-    var left = parseUnary()
-    if (peek() === "^") {
-      pos++
-      var right = parseExponential()
-      return Math.pow(left, right)
-    }
-    if (pos + 1 < s.length && s[pos] === "*" && s[pos + 1] === "*") {
-      pos += 2
-      var right2 = parseExponential()
-      return Math.pow(left, right2)
-    }
-    return left
-  }
-
-  function parseUnary() {
-    var c = peek()
-    if (c === "+") {
-      pos++
-      return parseUnary()
-    }
-    if (c === "-") {
-      pos++
-      return -parseUnary()
-    }
-    return parsePrimary()
-  }
-
-  function parsePrimary() {
-    var c = peek()
-
-    if (consume("(")) {
-      var val = parseExpression()
-      if (!consume(")")) throw new Error("Mismatched parentheses")
-      if (peek() === "%" && !isModuloAtCurrent()) {
-        pos++
-        val = val / 100
-      }
-      return val
-    }
-
-    // Number literals
-    var match = s.slice(pos).match(/^(?:0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)/i)
-    if (match) {
-      var numStr = match[0]
-      pos += numStr.length
-      var num = Number(numStr)
-      return num
-    }
-
-    // Identifiers: functions & constants
-    var idMatch = s.slice(pos).match(/^[a-zA-Z_][a-zA-Z0-9_]*/)
-    if (idMatch) {
-      var name = idMatch[0].toLowerCase()
-      pos += idMatch[0].length
-
-      // Constants
-      if (name === "pi") return Math.PI
-      if (name === "e") return Math.E
-      if (name === "tau") return Math.PI * 2
-
-      // Function calls
-      if (consume("(")) {
-        var args = []
-        if (!consume(")")) {
-          while (true) {
-            args.push(parseExpression())
-            if (consume(",")) continue
-            if (consume(")")) break
-            throw new Error("Expected ')' or ',' in function call")
-          }
-        }
-        var arg0 = args[0]
-        switch (name) {
-          case "sqrt": return Math.sqrt(arg0)
-          case "cbrt": return Math.cbrt(arg0)
-          case "abs": return Math.abs(arg0)
-          case "round": return Math.round(arg0)
-          case "floor": return Math.floor(arg0)
-          case "ceil": return Math.ceil(arg0)
-          case "trunc": return Math.trunc(arg0)
-          case "sin": return Math.sin(arg0)
-          case "cos": return Math.cos(arg0)
-          case "tan": return Math.tan(arg0)
-          case "asin": return Math.asin(arg0)
-          case "acos": return Math.acos(arg0)
-          case "atan": return Math.atan(arg0)
-          case "log":
-          case "log10": return Math.log10(arg0)
-          case "ln": return Math.log(arg0)
-          case "log2": return Math.log2(arg0)
-          case "exp": return Math.exp(arg0)
-          case "pow": return Math.pow(arg0, args[1] !== undefined ? args[1] : 2)
-          case "min": return Math.min.apply(null, args)
-          case "max": return Math.max.apply(null, args)
-          default:
-            throw new Error("Unknown function: " + name)
-        }
-      }
-    }
-
-    throw new Error("Unexpected token at " + pos)
-  }
-
-  var res = parseExpression()
-  while (pos < s.length && s[pos] === " ") pos++
-  if (pos < s.length) throw new Error("Extra characters after expression")
-  return res
+var NUMBER_LITERAL = "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?"
+var CONSTANTS = { pi: Math.PI, e: Math.E, tau: Math.PI * 2 }
+var UNARY_FUNCTIONS = {
+  sqrt: Math.sqrt, cbrt: Math.cbrt, abs: Math.abs, round: Math.round,
+  floor: Math.floor, ceil: Math.ceil, trunc: Math.trunc,
+  sin: Math.sin, cos: Math.cos, tan: Math.tan,
+  asin: Math.asin, acos: Math.acos, atan: Math.atan,
+  log: Math.log10, log10: Math.log10, ln: Math.log, log2: Math.log2, exp: Math.exp
 }
+
+function knownFunction(name) {
+  return Object.prototype.hasOwnProperty.call(UNARY_FUNCTIONS, name) || name === "pow" || name === "min" || name === "max"
+}
+
+// [D] Limits protect the shell's shared QML thread from unbounded input.
+function tokenize(str) {
+  if (str.length > 1024) throw new Error("Expression is too long")
+  var tokens = []
+  var pos = 0
+  var numeric = new RegExp("^(?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|" + NUMBER_LITERAL + ")", "i")
+  while (pos < str.length) {
+    if (/\s/.test(str.charAt(pos))) { pos++; continue }
+    var rest = str.slice(pos)
+    var number = rest.match(numeric)
+    if (number) {
+      var value = Number(number[0])
+      if (!isFinite(value)) throw new Error("Number is out of range")
+      tokens.push({ kind: "number", text: number[0], value: value })
+      pos += number[0].length
+    } else if (str.charAt(pos) === "x" && tokens.length > 0 && /[\da-zA-Z.(]/.test(str.charAt(pos + 1))) {
+      tokens.push({ kind: "operator", text: "*" })
+      pos++
+    } else {
+      var identifier = rest.match(/^[a-zA-Z_][a-zA-Z0-9_]*/)
+      if (identifier) {
+        var name = identifier[0].toLowerCase()
+        tokens.push({ kind: name === "x" ? "operator" : "identifier", text: name === "x" ? "*" : name })
+        pos += identifier[0].length
+      } else {
+        var op = str.charAt(pos)
+        if (op === "*" && str.charAt(pos + 1) === "*") { op = "^"; pos++ }
+        if ("+-*/^%(),×÷".indexOf(op) < 0) throw new Error("Unexpected token at " + pos)
+        tokens.push({ kind: "operator", text: op === "×" ? "*" : (op === "÷" ? "/" : op) })
+        pos++
+      }
+    }
+    if (tokens.length > 256) throw new Error("Too many tokens")
+  }
+  return tokens
+}
+
+// Recursive descent; the same strict tokens drive root-search intent.
+function parseTokens(tokens) {
+  var pos = 0
+  var depth = 0
+  function peek() { return pos < tokens.length ? tokens[pos].text : "" }
+  function consume(text) { if (peek() !== text) return false; pos++; return true }
+  function node(value, percent) {
+    if (!isFinite(value)) throw new Error("Result is out of range")
+    return { value: value, percent: !!percent }
+  }
+  function modulo() {
+    if (peek() !== "%" || pos + 1 >= tokens.length) return false
+    var next = tokens[pos + 1]
+    // [D] A following + or - starts addition/subtraction after a postfix
+    // percent. Signed modulo operands require parentheses: 10 % (-3).
+    return next.kind === "number" || next.kind === "identifier" || next.text === "("
+  }
+
+  function additive() {
+    var left = multiplicative()
+    while (peek() === "+" || peek() === "-") {
+      var subtract = consume("-")
+      if (!subtract) consume("+")
+      var right = multiplicative()
+      var amount = right.percent && !left.percent ? left.value * right.value : right.value
+      left = node(subtract ? left.value - amount : left.value + amount, left.percent && right.percent)
+    }
+    return left
+  }
+
+  function multiplicative() {
+    var left = unary()
+    while (peek() === "*" || peek() === "/" || modulo()) {
+      var op = peek()
+      pos++
+      var right = unary()
+      if ((op === "/" || op === "%") && right.value === 0) throw new Error("Division by zero")
+      if (op === "*") left = node(left.value * right.value, left.percent !== right.percent)
+      else if (op === "/") left = node(left.value / right.value, left.percent && !right.percent)
+      else left = node(left.value % right.value, false)
+    }
+    return left
+  }
+
+  function unary() {
+    if (++depth > 64) throw new Error("Expression is nested too deeply")
+    var result
+    if (consume("+")) result = unary()
+    else if (consume("-")) { result = unary(); result = node(-result.value, result.percent) }
+    else result = power()
+    depth--
+    return result
+  }
+
+  function power() {
+    var left = primary()
+    if (peek() === "%" && !modulo()) { pos++; left = node(left.value / 100, true) }
+    if (consume("^")) left = node(Math.pow(left.value, unary().value), false)
+    return left
+  }
+
+  function primary() {
+    if (consume("(")) {
+      var value = additive()
+      if (!consume(")")) throw new Error("Mismatched parentheses")
+      return value
+    }
+    var token = tokens[pos++]
+    if (!token) throw new Error("Expected a number")
+    if (token.kind === "number") return node(token.value, false)
+    if (token.kind !== "identifier") throw new Error("Unexpected token")
+    var name = token.text
+    if (Object.prototype.hasOwnProperty.call(CONSTANTS, name)) return node(CONSTANTS[name], false)
+    if (!knownFunction(name) || !consume("(")) throw new Error("Unknown function: " + name)
+    var args = []
+    if (!consume(")")) {
+      do { args.push(additive().value) } while (consume(","))
+      if (!consume(")")) throw new Error("Expected ')' or ','")
+    }
+    // [D] Trigonometry is in radians; arity errors are not silently ignored.
+    if (Object.prototype.hasOwnProperty.call(UNARY_FUNCTIONS, name)) {
+      if (args.length !== 1) throw new Error(name + " takes one argument")
+      return node(UNARY_FUNCTIONS[name](args[0]), false)
+    }
+    if (name === "pow") {
+      if (args.length !== 2) throw new Error("pow takes two arguments")
+      return node(Math.pow(args[0], args[1]), false)
+    }
+    if (!args.length) throw new Error(name + " needs an argument")
+    return node((name === "min" ? Math.min : Math.max).apply(null, args), false)
+  }
+
+  var result = additive().value
+  if (pos !== tokens.length) throw new Error("Extra characters after expression")
+  if (!isFinite(result)) throw new Error("Result is out of range")
+  return result === 0 ? 0 : result
+}
+
+function parseMath(str) { return parseTokens(tokenize(str)) }
 
 // ------------------------------------------------------------- Main Evaluator
 
-function evaluate(query) {
-  if (!query || typeof query !== "string") return null
+function evaluate(query, currency, options) {
+  if (typeof query !== "string") return null
   var q = query.trim()
-  if (q.length < 2) return null
-
-  // Strip leading '=' if present: "= 42 * 2" -> "42 * 2"
-  var forced = false
+  if (!q || q.length > 1024) return null
+  var forced = !!(options && options.force)
   if (q.charAt(0) === "=") {
     forced = true
     q = q.slice(1).trim()
     if (!q) return null
   }
 
-  // 1. Base conversion: "255 in hex", "0xff in dec", "15 to bin", "0b1010 in dec"
-  var baseMatch = q.match(/^(0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+)\s+(?:in|to)\s+(hex|bin|binary|oct|octal|dec|decimal)$/i)
+  // Conversions and percentages use whole, signed decimal/scientific tokens:
+  // parseFloat must never turn a malformed amount (1..5) into a valid value.
+  var signed = "[+-]?" + NUMBER_LITERAL
+  var baseMatch = q.match(/^([+-]?)(0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)\s+(?:in|to)\s+(hex|bin|binary|oct|octal|dec|decimal)$/i)
   if (baseMatch) {
-    var rawNum = Number(baseMatch[1])
-    var targetBase = baseMatch[2]
-    var baseRes = convertBase(rawNum, targetBase)
-    if (baseRes !== null) {
-      return {
-        expression: q,
-        formatted: baseRes,
-        raw: rawNum,
-        type: "base"
-      }
-    }
+    var rawNum = Number(baseMatch[2]) * (baseMatch[1] === "-" ? -1 : 1)
+    var baseRes = convertBase(rawNum, baseMatch[3])
+    return baseRes === null ? null : { expression: q, formatted: baseRes, raw: rawNum, type: "base" }
   }
 
-  // 2. Check for unit/currency conversions:
-  // e.g. "5 km in mi", "100 usd to eur", "$100 in eur", "6ft in cm"
-  var convMatch = q.match(/^([$€£¥₹₩]?)\s*([\d.]+)\s*([a-zA-Z°]+)?\s+(?:to|in|=|\->)\s+([a-zA-Z°]+)$/i)
+  var convMatch = q.match(new RegExp("^([+-]?)\\s*([$€£¥₹₩]?)\\s*(" + signed + ")\\s*([a-zA-Z°]+)?\\s+(?:to|in|=|->)\\s+([a-zA-Z°]+)$", "i"))
   if (convMatch) {
-    var sym = convMatch[1]
-    var val = parseFloat(convMatch[2])
-    var fromUnit = convMatch[3] || (sym ? CURRENCY_SYMBOLS[sym] : "")
-    var toUnit = convMatch[4]
-    if (!isNaN(val) && fromUnit && toUnit) {
-      var conv = convertUnits(val, fromUnit, toUnit)
-      if (conv) {
-        return {
-          expression: q,
-          formatted: conv.formatted,
-          raw: conv.raw,
-          type: conv.type
-        }
-      }
-    }
+    if (convMatch[1] && /^[+-]/.test(convMatch[3])) return null
+    var sym = convMatch[2]
+    var val = Number(convMatch[3]) * (convMatch[1] === "-" ? -1 : 1)
+    var fromUnit = convMatch[4] || (sym ? CURRENCY_SYMBOLS[sym] : "")
+    if (sym && convMatch[4] && convMatch[4].toLowerCase() !== CURRENCY_SYMBOLS[sym]) return null
+    if (!fromUnit) return null
+    var conv = convertUnits(val, fromUnit, convMatch[5], currency)
+    if (!conv) return null
+    conv.expression = q
+    return conv
   }
 
-  // 3. Percentage patterns: "15% of 80", "15 % of 80"
-  var pctOfMatch = q.match(/^([\d.]+)\s*%\s+of\s+([\d.]+)$/i)
+  var pctOfMatch = q.match(new RegExp("^(" + signed + ")\\s*%\\s+of\\s+(" + signed + ")$", "i"))
   if (pctOfMatch) {
-    var p = parseFloat(pctOfMatch[1])
-    var total = parseFloat(pctOfMatch[2])
-    if (!isNaN(p) && !isNaN(total)) {
-      var pctRes = (p / 100) * total
-      return {
-        expression: q,
-        formatted: formatNumber(pctRes),
-        raw: pctRes,
-        type: "percentage"
-      }
-    }
+    var pctRes = (Number(pctOfMatch[1]) / 100) * Number(pctOfMatch[2])
+    return isFinite(pctRes) ? { expression: q, formatted: formatNumber(pctRes), raw: pctRes, type: "percentage" } : null
   }
 
-  // 4. Percentage proportion: "20 in % of 80" or "20 as % of 80"
-  var pctPropMatch = q.match(/^([\d.]+)\s+(?:in|as)\s+%\s+of\s+([\d.]+)$/i)
+  var pctPropMatch = q.match(new RegExp("^(" + signed + ")\\s+(?:in|as)\\s+%\\s+of\\s+(" + signed + ")$", "i"))
   if (pctPropMatch) {
-    var num = parseFloat(pctPropMatch[1])
-    var den = parseFloat(pctPropMatch[2])
-    if (!isNaN(num) && !isNaN(den) && den !== 0) {
-      var propRes = (num / den) * 100
-      return {
-        expression: q,
-        formatted: formatNumber(propRes) + "%",
-        raw: propRes,
-        type: "percentage"
-      }
-    }
-  }
-
-  // Single number check: if not forced, single isolated numbers (e.g. "42", "-5")
-  // are ignored so they don't hijack app/setting searches.
-  var isSingleNumber = /^[+-]?(?:0x[0-9a-fA-F]+|0b[01]+|0o[0-7]+|\d+(?:\.\d+)?(?:e[+-]?\d+)?)$/i.test(q)
-  if (!forced && isSingleNumber) {
-    return null
-  }
-
-  // 5. Intent detection for general math expressions:
-  // Must contain an operator (+, -, *, /, ^, %, x), math function call, or start with '='.
-  var hasOperator = /[+\-*\/^%×]|\s+x\s+/i.test(q)
-  var hasFunction = /^(?:sqrt|cbrt|abs|round|floor|ceil|sin|cos|tan|log|ln|exp)\s*\(/i.test(q)
-
-  if (!forced && !hasOperator && !hasFunction) {
-    return null
-  }
-
-  // Avoid triggering on non-math search queries that happen to have hyphens or slashes
-  // e.g. "system-settings", "/usr/bin/cat", "--version", "node -v", "ctrl-c"
-  if (!forced && !hasFunction) {
-    // If it looks like a path or unix flag, ignore
-    if (/^\/|\s-[a-zA-Z]|\s--[a-zA-Z]/.test(q)) return null
-    // If it contains letters that aren't 'e' (scientific), 'x' (times/hex), or constants, ignore
-    var nonMathLetters = q.replace(/0x[0-9a-f]+/gi, "")
-      .replace(/\b(?:pi|tau|e)\b/gi, "")
-      .replace(/\s+[x×]\s+/gi, "")
-    if (/[a-wy-z]/i.test(nonMathLetters)) return null
+    var den = Number(pctPropMatch[2])
+    var num = Number(pctPropMatch[1])
+    var propRes = (num / den) * 100
+    return isFinite(num) && isFinite(den) && den !== 0 && isFinite(propRes) ? { expression: q, formatted: formatNumber(propRes) + "%", raw: propRes, type: "percentage" } : null
   }
 
   try {
-    var result = parseMath(q)
-    if (typeof result === "number" && isFinite(result)) {
-      return {
-        expression: q,
-        formatted: formatNumber(result),
-        raw: cleanFloat(result),
-        type: "number"
-      }
+    var tokens = tokenize(q)
+    var intent = forced
+    var onlyNumber = tokens.length === 1 && tokens[0].kind === "number"
+      || tokens.length === 2 && (tokens[0].text === "+" || tokens[0].text === "-") && tokens[1].kind === "number"
+    if (!forced && onlyNumber) return null
+    for (var i = 0; i < tokens.length; i++) {
+      var token = tokens[i]
+      if (token.kind === "identifier") {
+        if (knownFunction(token.text) && tokens[i + 1] && tokens[i + 1].text === "(") intent = true
+        else if (!Object.prototype.hasOwnProperty.call(CONSTANTS, token.text)) return null
+      } else if ("+-*/^%".indexOf(token.text) >= 0) intent = true
     }
+    if (!intent) return null
+    var result = parseTokens(tokens)
+    return { expression: q, formatted: formatNumber(result), raw: result, type: "number" }
   } catch (e) {
-    // Parse error: return null (don't break launcher search)
+    // Incomplete/invalid input is normal while typing; root search stays usable.
+    return null
   }
+}
 
-  return null
+function copyText(result, action) {
+  if (!result || result.error || typeof result.formatted !== "string") throw new Error(result && result.error || "No calculator result")
+  if (action === "open" || action === "copy-result") return result.formatted
+  if (action === "copy-equation") return result.expression + " = " + result.formatted
+  if (action === "copy-raw") return String(result.raw)
+  throw new Error("Unknown calculator action " + action)
 }
 
 if (typeof module !== "undefined") {
@@ -623,6 +510,7 @@ if (typeof module !== "undefined") {
     evaluate: evaluate,
     formatNumber: formatNumber,
     convertUnits: convertUnits,
-    parseMath: parseMath
+    parseMath: parseMath,
+    copyText: copyText
   }
 }

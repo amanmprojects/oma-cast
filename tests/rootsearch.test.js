@@ -8,6 +8,7 @@ const RS = require("../plugin/core/RootSearch.js")
 
 const deps = { Ranker, Frecency, OmarchyMenu, Calculator }
 const NOW = Date.UTC(2026, 9, 19, 12)
+const CURRENCY = { rates: { USD: 1, EUR: 0.8 }, source: "ECB via Frankfurter", date: "2026-10-19", stale: false }
 
 const apps = ["firefox", "chromium", "signal-desktop", "org.gnome.Nautilus", "Alacritty", "libreoffice-writer"].map((id) => ({
   id,
@@ -147,9 +148,16 @@ test("calculator shows at the top of results for math expressions (Phase 2 accep
   assert.equal(unitSections[0].id, "calculator")
   assert.equal(unitSections[0].rows[0].candidate.title, "= 3.10685596119 mi")
 
-  const currSections = results("100 usd in eur")
+  const currSections = results("100 usd in eur", ctx({ currency: CURRENCY }))
   assert.equal(currSections[0].id, "calculator")
-  assert.equal(currSections[0].rows[0].candidate.title, "= 92 EUR")
+  assert.equal(currSections[0].rows[0].candidate.title, "= 80 EUR")
+  assert.equal(currSections[0].rows[0].candidate.rateDate, CURRENCY.date)
+  assert.equal(currSections[0].rows[0].candidate.rateSource, CURRENCY.source)
+  assert.equal(currSections[0].rows[0].candidate.typeLabel, "2026-10-19")
+  assert.match(currSections[0].rows[0].candidate.subtitle, /ECB via Frankfurter/)
+  const stale = results("100 usd in eur", ctx({ currency: { ...CURRENCY, stale: true } }))[0].rows[0].candidate
+  assert.equal(stale.title, "= 80 EUR")
+  assert.equal(stale.typeLabel, "Stale · 2026-10-19")
 })
 
 test("calculator row actions", () => {
@@ -166,4 +174,34 @@ test("calculator row actions", () => {
   assert.equal(actions[1].shortcut, "Ctrl ↵")
   assert.equal(actions[2].id, "copy-raw")
   assert.equal(actions[2].shortcut, "Ctrl Shift C")
+})
+
+test("unavailable rates have no copy actions and never display undefined", () => {
+  for (const query of ["100 usd in eur", "1 btc in usd", "1 eth in eur"]) {
+    const sections = results(query)
+    const row = sections[0].rows[0].candidate
+    assert.equal(sections[0].id, "calculator")
+    assert.ok(row.calculatorError)
+    assert.equal(row.disabled, true)
+    assert.equal(row.rawResult, undefined)
+    assert.ok(!row.title.includes("undefined"))
+    assert.deepEqual(RS.actionsFor(row), [])
+    assert.equal(sections.at(-1).id, "fallback-commands")
+  }
+})
+
+test("rate updates recompute the same currency row without affecting other providers", () => {
+  const before = results("100 usd in eur", ctx({ currency: CURRENCY }))
+  const after = results("100 usd in eur", ctx({ currency: { ...CURRENCY, rates: { USD: 1, EUR: 0.6 } } }))
+  assert.equal(before[0].rows[0].candidate.id, after[0].rows[0].candidate.id)
+  assert.equal(after[0].rows[0].candidate.result, "60 EUR")
+  assert.deepEqual(before.at(-1), after.at(-1))
+  assert.equal(results("2+2")[0].rows[0].candidate.result, "4")
+  assert.ok(!results("firefox").some(s => s.id === "calculator"))
+  assert.ok(!results("42").some(s => s.id === "calculator"))
+})
+
+test("invalid expressions never hijack search and calculator stays out of submenus", () => {
+  for (const query of ["1..5 km in m", "15..5% of 80", "--version", "/usr/bin/cat", "sqrt(-1)"]) assert.ok(!results(query).some(s => s.id === "calculator"), query)
+  assert.ok(!RS.submenuSections(candidates(), "system", "2+2", ctx(), deps).some(s => s.id === "calculator"))
 })

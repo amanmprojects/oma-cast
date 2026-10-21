@@ -86,13 +86,26 @@ oma-cast call <method> [json]    # call any backend method
 oma-cast doctor
 ```
 
+## Calculator
+
+Type `2+2`, `5 km in mi`, or `100 usd in eur` into root search. ↵ copies the result, Ctrl+↵ copies the equation, and Ctrl+Shift+C copies the raw number. Prefix a single number with `=` to show it as a calculator result.
+
+Currency conversions use dated [ECB rates through Frankfurter](https://frankfurter.dev/v1/), refreshed in the background every 24 hours and cached locally. These are reference rates, not live market quotes. The row shows the source/date and labels stale data; offline mode keeps the last good rates. On first use without a cache, currency conversion needs a connection. BTC and ETH are unsupported; there are no bundled exchange rates. No expressions or amounts are sent to the provider.
+
+The calculator supports arithmetic, percentages, math functions, physical units, temperature and safe-integer base conversions. Trigonometry uses radians, volume measures use US units, and months/years use average durations. Calendar/time-zone calculations, calculator history, and paste actions are not implemented.
+
+```sh
+oma-cast call calculator.calculate '{"expression":"100 usd in eur"}'
+oma-cast call calculator.refreshCurrencies
+```
+
 ## Roadmap
 
 oma-cast is early. Search, ranking and the Omarchy integration are done. Coming next:
 
 - [ ] Settings window
 - [ ] Script Commands
-- [ ] Clipboard history, snippets, quicklinks, calculator
+- [ ] Clipboard history, snippets, quicklinks, calculator history
 - [ ] Running Raycast extensions built from the open-source [`raycast/extensions`](https://github.com/raycast/extensions) repo
 - [ ] Window management
 - [ ] Importing your `.rayconfig` from macOS
@@ -102,9 +115,12 @@ The full plan is in [`SPEC.md`](SPEC.md).
 ## Development
 
 ```sh
-node --test tests/        # unit tests, no npm install needed
-tests/smoke.sh            # live checks against the running shell
-oma-cast dev          # reload on every save
+node --test tests/*.test.js   # unit tests, no npm install needed
+bash tests/qml-service.sh     # rate lifecycle + real FileView, isolated offscreen instance
+bash tests/qml-service.sh launcher  # shortcut dispatch, hidden windows; requires Wayland
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml/tst_Calculator.qml
+tests/smoke.sh                # live checks against the running shell
+oma-cast dev                 # reload on every save
 ```
 
 Quickshell caches QML for the life of the process, so run `oma-cast reload` after editing anything under `plugin/`. See [`CLAUDE.md`](CLAUDE.md) for the layout and conventions.

@@ -150,9 +150,33 @@ function fallbackRows(query) {
   })
 }
 
+function calculatorCandidate(query, result) {
+  var subtitle = result.expression || query
+  if (result.type === "currency") subtitle += " · " + result.rateSource
+  return {
+    id: "calc:" + query,
+    type: "calculator",
+    kind: "calculator",
+    title: result.error || "= " + result.formatted,
+    subtitle: subtitle,
+    typeLabel: result.rateDate ? (result.stale ? "Stale · " : "") + result.rateDate : "Calculator",
+    glyph: "",
+    glyphFont: "symbols",
+    result: result.formatted,
+    rawResult: result.raw,
+    expression: result.expression || query,
+    calculatorError: result.error || "",
+    disabled: !!result.error,
+    rateSource: result.rateSource || "",
+    rateDate: result.rateDate || "",
+    stale: !!result.stale,
+    rootSearch: { when: "searching" }
+  }
+}
+
 // Sections for the root view (SPEC §7.2):
 //   empty query: Favorites, Suggestions, Commands, Applications
-//   query:       Results, Use "<q>" with…
+//   query:       Calculator, Results, Use "<q>" with…
 function rootSections(candidates, query, ctx, deps) {
   var q = String(query || "").trim()
   var decorated = []
@@ -167,28 +191,12 @@ function rootSections(candidates, query, ctx, deps) {
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
     if (deps.Calculator) {
-      var calc = deps.Calculator.evaluate(q)
+      var calc = deps.Calculator.evaluate(q, ctx.currency)
       if (calc) {
         sections.push({
           id: "calculator",
           title: "Calculator",
-          rows: [{
-            candidate: {
-              id: "calc:" + q,
-              type: "calculator",
-              kind: "calculator",
-              title: "= " + calc.formatted,
-              subtitle: calc.expression || q,
-              typeLabel: "Calculator",
-              glyph: "\uf1ec",
-              glyphFont: "symbols",
-              result: calc.formatted,
-              rawResult: calc.raw,
-              expression: calc.expression || q,
-              rootSearch: { when: "searching" }
-            },
-            record: null
-          }]
+          rows: [{ candidate: calculatorCandidate(q, calc), record: null }]
         })
       }
     }
@@ -242,6 +250,7 @@ function submenuSections(candidates, menuId, query, ctx, deps) {
 // Actions for a row (SPEC §10.2 action panel, §10.3 shortcuts). The first is
 // primary (↵), the second secondary (Ctrl ↵).
 function actionsFor(candidate) {
+  if (candidate.kind === "calculator" && candidate.calculatorError) return []
   var primary
   var list = []
   switch (candidate.kind) {
@@ -315,6 +324,7 @@ if (typeof module !== "undefined") {
     menuCandidates: menuCandidates,
     builtinCandidate: builtinCandidate,
     decorate: decorate,
+    calculatorCandidate: calculatorCandidate,
     rootSections: rootSections,
     submenuSections: submenuSections,
     actionsFor: actionsFor,

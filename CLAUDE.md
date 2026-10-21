@@ -66,7 +66,10 @@ Rules for `plugin/core/*.js`: one self-contained file per module (QML `import "x
 ## Commands
 
 ```sh
-node --test tests/           # unit tests (node's built-in runner; no npm install)
+node --test tests/*.test.js  # unit tests (node's built-in runner; no npm install)
+bash tests/qml-service.sh    # isolated, offscreen native rate service + FileView tests
+bash tests/qml-service.sh launcher  # hidden native launcher shortcut tests; needs Wayland
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests/qml/tst_Calculator.qml
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate plugin
 
@@ -109,7 +112,8 @@ Renamed **raylinux → oma-launcher → oma-cast** on 2026-10-19 (plugin `typecr
 Works:
 - **Root search** ported from ref 02 §4.2–4.6 (`core/Ranker.js`, `core/Frecency.js`, golden tests). Sections (`core/RootSearch.js`):
   - empty root: Favorites, Suggestions (frecency > 1, top 6), Commands, Applications
-  - query: Results, then `Use "<q>" with…` (Google, DuckDuckGo fallbacks)
+  - query: Calculator (when valid), Results, then `Use "<q>" with…` (Google, DuckDuckGo fallbacks)
+- **Inline calculator (Phase 2, partial):** safe JS parser, arithmetic, percentages, functions, physical units, temperature, and safe-integer bases. Root-search results provide Copy Result, Copy Equation, and Copy Raw Number. Currency rates are fetched daily through native QML from Frankfurter's ECB v1 endpoint and atomically cached under `$XDG_CACHE_HOME/oma-cast/currency-rates.json`; rows disclose date/source/staleness. No bundled rates or crypto. Explicit `calculator.calculate` and `calculator.refreshCurrencies` RPCs work.
 - **Providers:** apps from `shell.appLibrary`, the whole Omarchy menu (about 400 items, with breadcrumbs, guards, ✓ state and font/power-profile provider rows), and the built-in "Omarchy Menu".
 - **Ranking state:** frecency (+100 per launch, 10-day half-life) and learned search terms in `db/frecency.json`. Aliases (exact → top; duplicates rejected), favourites (Ctrl+Shift+F, reorder Ctrl+Alt+↑↓) and disabled commands live in `db/settings.json` `commands`.
 - **Navigation:** pushed Omarchy submenus (search within them), the alias editor, back with Esc / Ctrl+[ / Backspace on an empty query / the header arrow, and Shift+Esc to pop to root.
@@ -121,10 +125,11 @@ Works:
   - Compact mode shows only the header until you type.
   - A launch from root clears the query [I].
   - A row is selected on hover only after a real pointer move (Omarchy's PointerMoveGate).
-- **Latency:** show → mapped in 37–44 ms, hide in 9–25 ms (`tests/smoke.sh`).
-- **Tests:** 65 unit tests (`node --test tests/`).
+- **Latency:** final 2026-10-21 smoke run after reload passed: show 43–69 ms, hide 20–23 ms, worst 69 ms. An earlier run during shell failure missed the budget (186 ms); the recovered shell passed all functional and latency checks.
+- **Tests:** 102 Node tests (`node --test tests/*.test.js`), 5 Qt parser checks, 16 native rate-service checks and 9 hidden launcher action checks. The QML totals include setup/cleanup.
 
 Stubbed / not yet:
+- Calculator history, calendar/time-zone math and paste actions are not implemented. Rates are daily reference quotes, not trading prices. The rest of Phase 2 (settings, quicklinks, Script Commands) remains incomplete.
 - Keystroke buffering before the surface maps. Keys sent within ~40 ms of the hotkey go to the window underneath.
 - Vim navigation bindings, Ctrl+P dropdown, Ctrl+T, Ctrl+Shift+K, inline argument pills, alerts.
 - No settings window, so you can't re-enable a disabled command except by editing `~/.local/share/oma-cast/db/settings.json` (delete its `enabled: false`). That's Phase 2.
@@ -135,5 +140,6 @@ Deviations from the original spec (SPEC §2.0 and the Phase 1 note in §12):
 - JSON documents instead of SQLite; no DB encryption or libsecret key.
 - Logs go to the shell log; `config.json` instead of `config.toml`; no D-Bus name.
 - The Omarchy theme replaces Raycast's 8 themes; the HUD is Omarchy's OSD.
+- The calculator uses pure JS instead of fend, with 12-significant-digit fractional display, unrounded JS raw results, US volume measures and Julian-average month/year durations (SPEC Phase 2 note). Ctrl+Enter copies the equation; paste waits for Phase 3.
 
 Testing lesson: the query survives hide/show until pop-to-root. A live test must clear it first (Ctrl+U), or typed text gets appended to the old query. Pressing ↵ on a stale query once opened real browser tabs.

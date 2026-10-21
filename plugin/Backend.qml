@@ -40,7 +40,8 @@ Item {
   property var candidates: []
   property var candidatesById: ({})
   property int candidatesRevision: 0
-  readonly property bool loading: menuSource.loading
+  readonly property bool loading: menuSource.loading || currencyRates.loading
+  readonly property int currencyRevision: currencyRates.revision
 
   signal notification(string method, var data)
 
@@ -99,7 +100,8 @@ Item {
       commands: settingsStore.loaded ? settingsStore.doc.commands : ({}),
       frecency: frecencyStore.loaded ? frecencyStore.doc.items : ({}),
       nowMs: Date.now(),
-      sensitivity: settingsStore.loaded ? settingsStore.doc.general.rootSearchSensitivity : "medium"
+      sensitivity: settingsStore.loaded ? settingsStore.doc.general.rootSearchSensitivity : "medium",
+      currency: currencyRates.rateContext()
     }
   }
 
@@ -322,17 +324,8 @@ Item {
         var id = String(data && data.id || "")
         if (id.indexOf("calc:") === 0) {
           var expr = id.slice(5)
-          var calcResult = Calculator.evaluate(expr)
-          if (calcResult) {
-            return RootSearch.actionsFor({
-              id: id,
-              kind: "calculator",
-              title: "= " + calcResult.formatted,
-              result: calcResult.formatted,
-              rawResult: calcResult.raw,
-              expression: calcResult.expression || expr
-            })
-          }
+          var calcResult = Calculator.evaluate(expr, currencyRates.rateContext())
+          return calcResult ? RootSearch.actionsFor(RootSearch.calculatorCandidate(expr, calcResult)) : []
         }
         var candidate = backend.decorated(id)
         if (!candidate) {
@@ -344,20 +337,13 @@ Item {
       },
       performAction: function(data) {
         // Calculator rows are generated, not stored candidates.
-        if (data && data.id && data.id.indexOf("calc:") === 0) {
+        if (data && typeof data.id === "string" && data.id.indexOf("calc:") === 0) {
           var expr = data.id.slice(5)
-          var calcResult = Calculator.evaluate(data.query || expr)
-          if (calcResult) {
-            var action = data.action || "copy-result"
-            var text = String(calcResult.formatted)
-            if (action === "copy-equation") {
-              text = (calcResult.expression || expr) + " = " + calcResult.formatted
-            } else if (action === "copy-raw") {
-              text = String(calcResult.raw !== undefined ? calcResult.raw : calcResult.formatted)
-            }
-            Util.execArgv(["wl-copy", "--", text])
-            return { close: true, hud: action === "copy-equation" ? "Copied Equation" : "Copied to Clipboard" }
-          }
+          var calcResult = Calculator.evaluate(expr, currencyRates.rateContext())
+          var action = data.action || "copy-result"
+          var text = Calculator.copyText(calcResult, action)
+          Util.execArgv(["wl-copy", "--", text])
+          return { close: true, hud: action === "copy-equation" ? "Copied Equation" : "Copied to Clipboard" }
         }
         // Fallbacks are rows, not stored candidates.
         var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === (data && data.id) })[0]
@@ -373,10 +359,11 @@ Item {
     Rpc.register(backend.registry, "calculator", {
       calculate: function(data) {
         var expr = String(data && (data.expression || data.query) || "")
-        var res = Calculator.evaluate(expr)
-        if (!res) throw new Error("Could not evaluate expression: " + expr)
+        var res = Calculator.evaluate(expr, currencyRates.rateContext(), { force: true })
+        if (!res || res.error) throw new Error(res && res.error || "Could not evaluate expression: " + expr)
         return res
-      }
+      },
+      refreshCurrencies: function() { return currencyRates.refresh(true) }
     })
 
     Rpc.register(backend.registry, "frecency", {
@@ -410,7 +397,10 @@ Item {
   // Guards and providers describe live system state: refresh them each open.
   Component.onDestruction: { settingsStore.flush(); frecencyStore.flush() }
   onNotification: function(method, data) {
-    if (method === "window.visibilityChanged" && data && data.visible) menuSource.refresh()
+    if (method === "window.visibilityChanged" && data && data.visible) {
+      menuSource.refresh()
+      currencyRates.refresh(false)
+    }
   }
 
   // ------------------------------------------------------------ persistence
@@ -428,6 +418,14 @@ Item {
     id: menuSource
     onRevisionChanged: rebuildTimer.restart()
     onMessage: function(level, text, metadata) { backend.log(level, "omarchy-menu", text, metadata) }
+  }
+
+  CurrencyRates {
+    id: currencyRates
+    ready: backend.directoriesReady
+    path: backend.paths.cache + "/currency-rates.json"
+    onChanged: backend.emit("calculator.currenciesRefreshed", rateContext())
+    onMessage: function(level, text, metadata) { backend.log(level, "currencies", text, metadata) }
   }
 
   JsonStore {

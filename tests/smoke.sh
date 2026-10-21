@@ -27,6 +27,29 @@ search zzzz-no-match | grep -q '"id":"fallback-commands"' && pass "fallback sect
 count=$($cli call system.info | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["data"]["candidates"])')
 (( count > 300 )) && pass "$count candidates (apps + Omarchy menu)" || bad "only $count candidates"
 
+echo "calculator (Phase 2)"
+calc() { $cli call calculator.calculate "{\"expression\":\"$1\"}"; }
+calc '2+2' | grep -q '"formatted":"4"' && pass "2+2 = 4" || bad "2+2"
+calc '5 km in mi' | grep -q '"formatted":"3.10685596119 mi"' && pass "5 km in mi" || bad "unit conversion"
+calc '12 / 100000000000' | grep -q '"formatted":"1.2e-10"' && pass "scientific exponent preserved" || bad "scientific formatting"
+calc '200 + 10% + 5' | grep -q '"formatted":"225"' && pass "chained percentages" || bad "percent parsing"
+calc '42' | grep -q '"raw":42' && pass "explicit RPC accepts a single number" || bad "explicit calculator RPC"
+calc '1 btc in usd' | grep -q '"ok":false' && pass "unsupported crypto is an error" || bad "invented crypto rate"
+# No network or clipboard writes: compare against the backend's cached result.
+currency=$(calc '100 usd in eur')
+if [[ $currency == *'"ok":true'* ]]; then
+  row=$(search '100 usd in eur')
+  python3 -I -c '
+import json,sys
+result=json.loads(sys.argv[1])["data"]
+row=json.loads(sys.argv[2])["data"][0]["rows"][0]
+assert result["rateDate"] and result["rateSource"] == "ECB via Frankfurter"
+assert row["result"] == result["formatted"] and row["rateDate"] == result["rateDate"]
+' "$currency" "$row" && pass "currency row matches the dated cache" || bad "currency metadata"
+else
+  search '100 usd in eur' | grep -q '"disabled":true' && pass "missing rates cannot be copied" || bad "unavailable currency row"
+fi
+
 echo "toggle latency (show -> layer mapped, hide -> unmapped; budget 100 ms)"
 sock="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
 events=$(mktemp)

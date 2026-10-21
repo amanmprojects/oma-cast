@@ -11,15 +11,24 @@ import qs.Ui
 //
 // Views form a navigation stack: root search, a pushed Omarchy submenu, or
 // the alias editor. Each view keeps its own query.
-OverlayWindow {
+PanelWindow {
   id: window
+
+  property bool shown: false
+  visible: shown
+
+  anchors { top: true; bottom: true; left: true; right: true }
+  color: "transparent"
+
+  WlrLayershell.namespace: "oma-cast"
+  WlrLayershell.layer: WlrLayer.Overlay
+  WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+  exclusionMode: ExclusionMode.Ignore
 
   required property var backend
   property var appLibrary: null
 
   signal dismissRequested()
-
-  WlrLayershell.namespace: "oma-cast"
 
   // ------------------------------------------------------------ settings
   readonly property var general: {
@@ -372,7 +381,7 @@ OverlayWindow {
       if (key === Qt.Key_PageUp) { window.move(-8); return true }
       if (key === Qt.Key_PageDown) { window.move(8); return true }
       if (ctrl && shift && key === Qt.Key_F) { window.performIfOffered(["favorite-add", "favorite-remove"]); return true }
-      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id"]); return true }
+      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-raw", "copy-command", "copy-id"]); return true }
       if (alt && shift && key === Qt.Key_D) { window.performIfOffered(["disable"]); return true }
       if (ctrl && key >= Qt.Key_1 && key <= Qt.Key_9) {
         var target = window.nthItem(key - Qt.Key_0)
@@ -397,6 +406,14 @@ OverlayWindow {
   Connections {
     target: window.backend
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen) window.rebuild(false) }
+    function onCurrencyRevisionChanged() {
+      if (!window.shown) return
+      window.rebuild(false)
+      if (window.actionPanelOpen) {
+        window.actions = window.actionsForSelected()
+        window.actionPanelOpen = window.actions.length > 0
+      }
+    }
   }
 
   // ================================================================== UI

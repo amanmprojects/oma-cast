@@ -117,7 +117,7 @@ Works:
 - **Providers:** apps from `shell.appLibrary`, the whole Omarchy menu (about 400 items, with breadcrumbs, guards, ✓ state and font/power-profile provider rows), and the built-in "Omarchy Menu".
 - **Ranking state:** frecency (+100 per launch, 10-day half-life) and learned search terms in `db/frecency.json`. Aliases (exact → top; duplicates rejected), favourites (Ctrl+Shift+F, reorder Ctrl+Alt+↑↓) and disabled commands live in `db/settings.json` `commands`.
 - **Navigation:** pushed Omarchy submenus (search within them), the alias editor, back with Esc / Ctrl+[ / Backspace on an empty query / the header arrow, and Shift+Esc to pop to root.
-- **Keyboard:** Ctrl+K action panel (filterable, per-row shortcuts), ↵ / Ctrl+↵ / Ctrl+Shift+↵ for the first three actions, Ctrl+1–9, Ctrl+↑↓ to jump sections, PageUp/PageDown, Ctrl+N/P (emacs), ↑ on an empty root for search history, Ctrl+Shift+C copy, Alt+Shift+D disable, Ctrl + / − / 0 zoom.
+- **Keyboard:** Ctrl+K action panel (filterable, per-row shortcuts), ↵ / Ctrl+↵ / Ctrl+Shift+↵ for the first three actions, Ctrl+1–9, Ctrl+↑↓ to jump sections, PageUp/PageDown, Ctrl+N/P (emacs), ↑ on an empty root for search history, Ctrl+Shift+C copy, Alt+Shift+D disable, Ctrl + / − / 0 zoom. Numpad digits, operators and decimal separators work in queries, aliases and action filters; keypad Enter and Ctrl shortcuts retain their actions.
 - **Feedback:** toasts in the footer, a HUD through Omarchy's OSD when the window closes, and a 2 px loading bar while guards and providers refresh (on every open, about 250 ms in the background).
 - **Window behaviour:**
   - The `escapeKeyBehavior` setting works both ways.
@@ -126,7 +126,7 @@ Works:
   - A launch from root clears the query [I].
   - A row is selected on hover only after a real pointer move (Omarchy's PointerMoveGate).
 - **Latency:** final 2026-10-21 smoke run after reload passed: show 43–69 ms, hide 20–23 ms, worst 69 ms. An earlier run during shell failure missed the budget (186 ms); the recovered shell passed all functional and latency checks.
-- **Tests:** 102 Node tests (`node --test tests/*.test.js`), 5 Qt parser checks, 16 native rate-service checks and 9 hidden launcher action checks. The QML totals include setup/cleanup.
+- **Tests:** 102 Node tests (`node --test tests/*.test.js`), 5 Qt parser checks, 16 native rate-service checks and 40 hidden launcher input/action checks. The QML totals include setup/cleanup.
 
 Stubbed / not yet:
 - Calculator history, calendar/time-zone math and paste actions are not implemented. Rates are daily reference quotes, not trading prices. The rest of Phase 2 (settings, quicklinks, Script Commands) remains incomplete.

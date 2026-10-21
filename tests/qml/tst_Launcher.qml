@@ -68,13 +68,22 @@ TestCase {
 
   function init() { copiedText = "" }
 
+  function cleanup() {
+    if (testCase.qtest_results.failed)
+      console.warn("Launcher regression failed: " + testCase.qtest_results.functionName + " (" + testCase.qtest_results.dataTag + ")")
+  }
+
   function test_copyShortcuts_data() {
     return [
       { tag: "enter", key: Qt.Key_Return, modifiers: Qt.NoModifier, expected: "80 EUR" },
       { tag: "ctrl-enter", key: Qt.Key_Return, modifiers: Qt.ControlModifier, expected: "100 usd in eur = 80 EUR" },
       { tag: "ctrl-shift-c", key: Qt.Key_C, modifiers: Qt.ControlModifier | Qt.ShiftModifier, expected: "80" },
       { tag: "ctrl-shift-enter", key: Qt.Key_Return, modifiers: Qt.ControlModifier | Qt.ShiftModifier, expected: "80" },
-      { tag: "ctrl-1", key: Qt.Key_1, modifiers: Qt.ControlModifier, expected: "80 EUR" }
+      { tag: "ctrl-1", key: Qt.Key_1, modifiers: Qt.ControlModifier, expected: "80 EUR" },
+      { tag: "numpad-enter", key: Qt.Key_Enter, modifiers: Qt.KeypadModifier, expected: "80 EUR" },
+      { tag: "ctrl-numpad-enter", key: Qt.Key_Enter, modifiers: Qt.ControlModifier | Qt.KeypadModifier, expected: "100 usd in eur = 80 EUR" },
+      { tag: "ctrl-shift-numpad-enter", key: Qt.Key_Enter, modifiers: Qt.ControlModifier | Qt.ShiftModifier | Qt.KeypadModifier, expected: "80" },
+      { tag: "ctrl-numpad-1", key: Qt.Key_1, modifiers: Qt.ControlModifier | Qt.KeypadModifier, expected: "80 EUR" }
     ]
   }
 
@@ -83,6 +92,72 @@ TestCase {
     verify(window.handleKey({ key: data.key, modifiers: data.modifiers, text: "" }))
     compare(copiedText, data.expected)
     compare(window.query, "")
+  }
+
+  function test_typingModifiers_data() {
+    return [
+      { tag: "plain", modifiers: Qt.NoModifier, expected: true },
+      { tag: "shift", modifiers: Qt.ShiftModifier, expected: true },
+      { tag: "numpad", modifiers: Qt.KeypadModifier, expected: true },
+      { tag: "shift-numpad", modifiers: Qt.ShiftModifier | Qt.KeypadModifier, expected: true },
+      { tag: "ctrl", modifiers: Qt.ControlModifier, expected: false },
+      { tag: "ctrl-numpad", modifiers: Qt.ControlModifier | Qt.KeypadModifier, expected: false },
+      { tag: "alt-numpad", modifiers: Qt.AltModifier | Qt.KeypadModifier, expected: false },
+      { tag: "meta-numpad", modifiers: Qt.MetaModifier | Qt.KeypadModifier, expected: false },
+      { tag: "ctrl-shift-numpad", modifiers: Qt.ControlModifier | Qt.ShiftModifier | Qt.KeypadModifier, expected: false }
+    ]
+  }
+
+  function test_typingModifiers(data) {
+    var window = makeWindow("2+2")
+    compare(window.isTyping({ text: "5", modifiers: data.modifiers }), data.expected)
+  }
+
+  function test_numpadTyping_data() {
+    var cases = []
+    var text = "0123456789+-/*."
+    for (var i = 0; i < text.length; i++)
+      cases.push({ tag: text.charAt(i), key: text.charCodeAt(i), text: text.charAt(i) })
+    return cases
+  }
+
+  function test_numpadTyping(data) {
+    var window = makeWindow("2+2")
+    window.setQuery("")
+    verify(window.handleKey({ key: data.key, modifiers: Qt.KeypadModifier, text: data.text }))
+    compare(window.query, data.text)
+    compare(copiedText, "")
+  }
+
+  function test_numpadExpression() {
+    var window = makeWindow("2+2")
+    window.setQuery("")
+    var expression = "0+1+2+3+4+5+6+7+8+9-5*2/4+0.5"
+    for (var i = 0; i < expression.length; i++)
+      verify(window.handleKey({ key: expression.charCodeAt(i), modifiers: Qt.KeypadModifier, text: expression.charAt(i) }))
+    compare(window.query, expression)
+    compare(window.selectedRow.itemId, "calc:" + expression)
+    verify(window.handleKey({ key: Qt.Key_Enter, modifiers: Qt.KeypadModifier, text: "\r" }))
+    compare(copiedText, "43")
+  }
+
+  function test_numpadAlias() {
+    var window = makeWindow("2+2")
+    window.push({ kind: "alias", title: "Set Alias", value: "" })
+    verify(window.handleKey({ key: Qt.Key_5, modifiers: Qt.KeypadModifier, text: "5" }))
+    verify(window.handleKey({ key: Qt.Key_6, modifiers: Qt.ShiftModifier | Qt.KeypadModifier, text: "6" }))
+    compare(window.query, "56")
+    compare(copiedText, "")
+  }
+
+  function test_numpadActionFilter() {
+    var window = makeWindow("2+2")
+    verify(window.handleKey({ key: Qt.Key_K, modifiers: Qt.ControlModifier, text: "" }))
+    verify(window.handleKey({ key: Qt.Key_Plus, modifiers: Qt.KeypadModifier, text: "+" }))
+    compare(window.query, "2+2")
+    verify(window.handleKey({ key: Qt.Key_Enter, modifiers: Qt.KeypadModifier, text: "\r" }))
+    compare(copiedText, "")
+    compare(window.actionPanelOpen, true)
   }
 
   function test_actionPanel() {

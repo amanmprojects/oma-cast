@@ -139,7 +139,13 @@ function toCandidate(item) {
     iconName: item.iconName || "",
     quicklinkId: item.id,
     // [O] Up to 3 arguments become inline fields after the search text.
-    arguments: parsed.error ? [] : parsed.arguments,
+    // Pills read {placeholder, required}; a default makes one optional.
+    arguments: parsed.error ? [] : parsed.arguments.map(function(a) {
+      return {
+        name: a.name, defaultValue: a.defaultValue, options: a.options, required: !a.defaultValue,
+        placeholder: a.options.length ? a.name + " ▾" : (a.defaultValue || a.name)
+      }
+    }),
     rootSearch: { when: "searching" }   // [O] Search Quicklinks lists them all
   }
 }

@@ -180,3 +180,12 @@ test("Create Quicklink suggests a name and link from a URL or path, nothing else
   assert.deepEqual(Q.suggestion("mailto:a@b.co"), { name: "a@b.co", link: "mailto:a@b.co" })
   for (const t of ["", "hello world", "e.g", "javascript:alert(1)", "two\nlines.com"]) assert.equal(Q.suggestion(t), null, t)
 })
+
+test("quicklink arguments use the argument-pill shape", () => {
+  const RS = require("../plugin/core/RootSearch.js")
+  const c = Q.toCandidate({ id: "a", name: "Repo", link: "https://github.com/{argument name=owner}/{argument name=repo default=oma-cast}?tab={argument name=tab options=\"Code,Issues\"}" })
+  assert.deepEqual(c.arguments.map((a) => [a.name, a.required, a.placeholder]), [["owner", true, "owner"], ["repo", false, "oma-cast"], ["tab", true, "tab ▾"]])
+  assert.equal(RS.missingArgument(c.arguments, { repo: "x" }), 0)
+  assert.equal(RS.missingArgument(c.arguments, { owner: "basecamp" }), 2)
+  assert.equal(RS.missingArgument(c.arguments, { owner: "basecamp", tab: "Issues" }), -1)
+})
